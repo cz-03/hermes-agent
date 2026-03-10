@@ -117,3 +117,78 @@ def reset_cache() -> None:
     _cached_tz = None
     _cached_tz_name = None
     _cache_resolved = False
+
+
+# ---------------------------------------------------------------------------
+# Relative time formatting
+# ---------------------------------------------------------------------------
+
+# Thresholds in seconds → (divisor, singular label, plural label)
+_RELATIVE_THRESHOLDS = [
+    (60,        1,    "just now",  "just now"),   # < 60 s  — no number
+    (3_600,     60,   "minute",    "minutes"),    # < 1 hr
+    (86_400,    3_600, "hour",     "hours"),      # < 1 day
+    (604_800,   86_400, "day",     "days"),       # < 1 week
+    (2_419_200, 604_800, "week",   "weeks"),      # < 4 weeks
+    (29_030_400, 2_419_200, "month", "months"),  # < ~11 months
+]
+
+
+def relative_time(dt: datetime, *, reference: Optional[datetime] = None) -> str:
+    """Return a human-readable relative time string for *dt*.
+
+    The result is relative to *reference* (defaults to ``now()``).
+    Both datetimes must be timezone-aware; naive datetimes are accepted but
+    treated as if they carry the configured local timezone.
+
+    Examples::
+
+        relative_time(now() - timedelta(seconds=30))   # "just now"
+        relative_time(now() - timedelta(minutes=5))    # "5 minutes ago"
+        relative_time(now() - timedelta(hours=2))      # "2 hours ago"
+        relative_time(now() + timedelta(days=3))       # "in 3 days"
+        relative_time(now() - timedelta(days=400))     # "1 year ago"
+
+    Args:
+        dt:        The datetime to describe.
+        reference: The point in time to measure from. Defaults to ``now()``.
+
+    Returns:
+        A short English string such as ``"just now"``, ``"3 minutes ago"``,
+        or ``"in 2 weeks"``.
+    """
+    ref = reference if reference is not None else now()
+
+    # Ensure both sides are tz-aware so subtraction never raises.
+    if dt.tzinfo is None:
+        tz = get_timezone()
+        dt = dt.replace(tzinfo=tz) if tz else dt.astimezone()
+    if ref.tzinfo is None:
+        ref = ref.astimezone()
+
+    delta_seconds = (ref - dt).total_seconds()
+    is_future = delta_seconds < 0
+    abs_seconds = abs(delta_seconds)
+
+    # "just now" bucket — within 45 seconds either way
+    if abs_seconds < 45:
+        return "just now"
+
+    unit_str = "year"   # default for very large values
+    value = 1
+
+    for threshold, divisor, singular, plural in _RELATIVE_THRESHOLDS:
+        if abs_seconds < threshold:
+            value = round(abs_seconds / divisor)
+            unit_str = singular if value == 1 else plural
+            break
+    else:
+        # Older than ~11 months → express in years
+        value = round(abs_seconds / 29_030_400)
+        unit_str = "year" if value == 1 else "years"
+
+    if unit_str in ("just now",):
+        return "just now"
+
+    readable = f"{value} {unit_str}"
+    return f"in {readable}" if is_future else f"{readable} ago"
